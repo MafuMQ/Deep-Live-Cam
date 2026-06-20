@@ -23,6 +23,8 @@ FACE_ENHANCER = None
 THREAD_SEMAPHORE = threading.Semaphore()
 THREAD_LOCK = threading.Lock()
 NAME = "DLC.FACE-ENHANCER"
+MODEL_FILES = ("GFPGANv1.4.onnx", "gfpgan-1024.onnx")
+MODEL_URL = "https://huggingface.co/hacksider/deep-live-cam/resolve/main/GFPGANv1.4.onnx"
 
 abs_dir = os.path.dirname(os.path.abspath(__file__))
 models_dir = os.path.join(
@@ -43,12 +45,31 @@ FFHQ_TEMPLATE_512 = np.array(
 )
 
 
+def _resolve_model_path(download_if_missing: bool = False) -> str | None:
+    for model_file in MODEL_FILES:
+        model_path = os.path.join(models_dir, model_file)
+        if os.path.exists(model_path):
+            return model_path
+
+    if download_if_missing:
+        from modules.utilities import conditional_download
+
+        update_status(f"Downloading {MODEL_FILES[0]}...", NAME)
+        conditional_download(models_dir, [MODEL_URL])
+
+        downloaded_path = os.path.join(models_dir, MODEL_FILES[0])
+        if os.path.exists(downloaded_path):
+            return downloaded_path
+
+    return None
+
+
 def pre_check() -> bool:
-    model_path = os.path.join(models_dir, "gfpgan-1024.onnx")
-    if not os.path.exists(model_path):
+    model_path = _resolve_model_path(download_if_missing=True)
+    if model_path is None:
         update_status(
-            f"GFPGAN ONNX model not found at {model_path}. "
-            "Please place gfpgan-1024.onnx in the models folder.",
+            "GFPGAN ONNX model not found. "
+            f"Expected one of: {', '.join(MODEL_FILES)}.",
             NAME,
         )
         return False
@@ -73,11 +94,11 @@ def get_face_enhancer() -> onnxruntime.InferenceSession:
 
     with THREAD_LOCK:
         if FACE_ENHANCER is None:
-            model_path = os.path.join(models_dir, "gfpgan-1024.onnx")
+            model_path = _resolve_model_path(download_if_missing=True)
 
-            if not os.path.exists(model_path):
+            if model_path is None:
                 raise FileNotFoundError(
-                    f"{NAME}: Model not found at {model_path}"
+                    f"{NAME}: Model not found. Expected one of: {', '.join(MODEL_FILES)}"
                 )
 
             try:

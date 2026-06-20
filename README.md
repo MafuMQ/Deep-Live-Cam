@@ -167,6 +167,10 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+On Windows and Linux with NVIDIA GPUs, `requirements.txt` now installs the
+CUDA runtime wheels that `onnxruntime-gpu` expects. You do not need to
+manually copy `cuDNN` or `cuBLAS` DLLs into the project.
+
 ** In case something goes wrong and you need to reinstall the virtual environment **
 
 ```bash
@@ -192,23 +196,22 @@ pip install git+https://github.com/TencentARC/GFPGAN.git@master
 
 **CUDA Execution Provider (Nvidia)**
 
-1. Install [CUDA Toolkit 12.8.0](https://developer.nvidia.com/cuda-12-8-0-download-archive)
-2. Install [cuDNN v8.9.7 for CUDA 12.x](https://developer.nvidia.com/rdp/cudnn-archive) (required for onnxruntime-gpu):
-   - Download cuDNN v8.9.7 for CUDA 12.x
-   - Make sure the cuDNN bin directory is in your system PATH
-3. Install dependencies:
+1. Install the project dependencies:
 
 ```bash
-pip install -U torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-pip uninstall onnxruntime onnxruntime-gpu
-pip install onnxruntime-gpu==1.21.0
+pip install -r requirements.txt
 ```
 
-3. Usage:
+2. Usage:
 
 ```bash
 python run.py --execution-provider cuda
 ```
+
+If you are using a clean `venv`, the NVIDIA runtime wheels in
+`requirements.txt` are enough for ONNX Runtime CUDA on Windows and Linux.
+If CUDA still falls back to CPU, check that your GPU driver is current and the
+Visual C++ runtime is installed on Windows.
 
 **CoreML Execution Provider (Apple Silicon)**
 
