@@ -18,6 +18,7 @@ simple_map: Dict[str, Any] = {}             # Stores simplified map (embeddings/
 # Paths
 source_path: str | None = None
 target_path: str | None = None
+target_paths: List[str] = []
 output_path: str | None = None
 
 # Processing Options

@@ -238,6 +238,16 @@ _RECENT_TARGET_DIR: Optional[str] = None
 _RECENT_OUTPUT_DIR: Optional[str] = None
 
 
+def _collect_target_media_paths(directory_path: str) -> List[str]:
+    media_paths: List[str] = []
+    for root, _dirs, files in os.walk(directory_path):
+        for file_name in sorted(files):
+            candidate = os.path.join(root, file_name)
+            if is_image(candidate) or is_video(candidate):
+                media_paths.append(candidate)
+    return media_paths
+
+
 # ─── image utilities ─────────────────────────────────────────────────────
 
 
@@ -550,12 +560,28 @@ class MainWindow(QMainWindow):
         tgt_col = QVBoxLayout()
         self.target_label = _make_image_drop(_("Target"), (200, 200))
         tgt_col.addWidget(self.target_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        tgt_row = QHBoxLayout()
         self.btn_select_target = QPushButton(_("Select a target"))
         self.btn_select_target.setToolTip(
-            _("Choose the target image or video to apply face swap to")
+            _("Choose one target image or video to apply face swap to")
         )
         self.btn_select_target.clicked.connect(self._on_select_target)
-        tgt_col.addWidget(self.btn_select_target)
+        self.btn_select_targets = QPushButton(_("Multi"))
+        self.btn_select_targets.setObjectName("secondary")
+        self.btn_select_targets.setToolTip(
+            _("Choose multiple target images or videos to process as a batch")
+        )
+        self.btn_select_targets.clicked.connect(self._on_select_targets)
+        self.btn_select_target_folder = QPushButton(_("Folder"))
+        self.btn_select_target_folder.setObjectName("secondary")
+        self.btn_select_target_folder.setToolTip(
+            _("Choose a folder containing target images or videos to process as a batch")
+        )
+        self.btn_select_target_folder.clicked.connect(self._on_select_target_folder)
+        tgt_row.addWidget(self.btn_select_target)
+        tgt_row.addWidget(self.btn_select_targets)
+        tgt_row.addWidget(self.btn_select_target_folder)
+        tgt_col.addLayout(tgt_row)
 
         row.addLayout(src_col)
         row.addLayout(swap_col)
@@ -727,6 +753,32 @@ class MainWindow(QMainWindow):
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)
 
+    def _set_target_selection(self, paths: List[str]) -> None:
+        modules.globals.target_paths = paths
+        modules.globals.target_path = paths[0] if paths else None
+
+        if not paths:
+            self.target_label.clear()
+            self.target_label.setText(_("Target"))
+            self.btn_select_target.setText(_("Select a target"))
+            return
+
+        first_path = paths[0]
+        if is_image(first_path):
+            self.target_label.setPixmap(render_image_preview(first_path, (200, 200)))
+            self.target_label.setText("")
+        elif is_video(first_path):
+            pm = render_video_preview(first_path, (200, 200))
+            if pm:
+                self.target_label.setPixmap(pm)
+                self.target_label.setText("")
+
+        if len(paths) == 1:
+            self.btn_select_target.setText(_("Select a target"))
+        else:
+            self.btn_select_target.setText(_(f"Select a target ({len(paths)})"))
+            update_status(f"Selected {len(paths)} batch targets. Preview shows the first item.")
+
     def _on_select_source(self) -> None:
         global _RECENT_SOURCE_DIR
         if _PREVIEW is not None:
@@ -760,21 +812,47 @@ class MainWindow(QMainWindow):
         if not path:
             return
         if is_image(path):
-            modules.globals.target_path = path
             _RECENT_TARGET_DIR = os.path.dirname(path)
-            self.target_label.setPixmap(render_image_preview(path, (200, 200)))
-            self.target_label.setText("")
+            self._set_target_selection([path])
         elif is_video(path):
-            modules.globals.target_path = path
             _RECENT_TARGET_DIR = os.path.dirname(path)
-            pm = render_video_preview(path, (200, 200))
-            if pm:
-                self.target_label.setPixmap(pm)
-                self.target_label.setText("")
+            self._set_target_selection([path])
         else:
-            modules.globals.target_path = None
-            self.target_label.clear()
-            self.target_label.setText(_("Target"))
+            self._set_target_selection([])
+
+    def _on_select_targets(self) -> None:
+        global _RECENT_TARGET_DIR
+        if _PREVIEW is not None:
+            _PREVIEW.hide()
+        paths, _filter = QFileDialog.getOpenFileNames(
+            self, _("select target images or videos"),
+            _RECENT_TARGET_DIR or "",
+            "Media (*.png *.jpg *.jpeg *.gif *.bmp *.mp4 *.mkv)",
+        )
+        if not paths:
+            return
+        valid_paths = [path for path in paths if is_image(path) or is_video(path)]
+        if not valid_paths:
+            self._set_target_selection([])
+            return
+        _RECENT_TARGET_DIR = os.path.dirname(valid_paths[0])
+        self._set_target_selection(valid_paths)
+
+    def _on_select_target_folder(self) -> None:
+        global _RECENT_TARGET_DIR
+        if _PREVIEW is not None:
+            _PREVIEW.hide()
+        directory_path = QFileDialog.getExistingDirectory(
+            self, _("select target folder"), _RECENT_TARGET_DIR or ""
+        )
+        if not directory_path:
+            return
+        target_paths = _collect_target_media_paths(directory_path)
+        if not target_paths:
+            update_status("No target images or videos were found in the selected folder.")
+            return
+        _RECENT_TARGET_DIR = directory_path
+        self._set_target_selection(target_paths)
 
     def _on_random_face(self) -> None:
         if _PREVIEW is not None:
@@ -799,9 +877,13 @@ class MainWindow(QMainWindow):
         global _RECENT_SOURCE_DIR, _RECENT_TARGET_DIR
         sp = modules.globals.source_path
         tp = modules.globals.target_path
+        if len(modules.globals.target_paths) > 1:
+            update_status("Swap source/target is only available for a single image target.")
+            return
         if not (sp and tp and is_image(sp) and is_image(tp)):
             return
         modules.globals.source_path, modules.globals.target_path = tp, sp
+        modules.globals.target_paths = [modules.globals.target_path]
         _RECENT_SOURCE_DIR = os.path.dirname(tp)
         _RECENT_TARGET_DIR = os.path.dirname(sp)
         if _PREVIEW is not None:
@@ -865,6 +947,9 @@ class MainWindow(QMainWindow):
         if _MAPPER is not None and _MAPPER.isVisible():
             update_status("Please complete pop-up or close it.")
             return
+        if len(modules.globals.target_paths) > 1 and modules.globals.map_faces:
+            update_status("Batch target processing is not available when Map faces is enabled.")
+            return
         if modules.globals.map_faces:
             modules.globals.source_target_map = []
             if is_image(modules.globals.target_path):
@@ -882,6 +967,15 @@ class MainWindow(QMainWindow):
 
     def _select_output_and_start(self) -> None:
         global _RECENT_OUTPUT_DIR
+        if len(modules.globals.target_paths) > 1:
+            path = QFileDialog.getExistingDirectory(
+                self, _("select output folder"), _RECENT_OUTPUT_DIR or ""
+            )
+            if path:
+                modules.globals.output_path = path
+                _RECENT_OUTPUT_DIR = path
+                self._start_cb()
+            return
         if is_image(modules.globals.target_path):
             path, _f = QFileDialog.getSaveFileName(
                 self, _("save image output file"),

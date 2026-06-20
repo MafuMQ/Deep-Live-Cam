@@ -200,21 +200,16 @@ def update_status(message: str, scope: str = 'DLC.CORE') -> None:
     if not modules.globals.headless:
         ui.update_status(message)
 
-def start() -> None:
-    """Start processing with performance monitoring."""
+
+def _process_current_target() -> bool:
+    """Process the target currently stored in modules.globals.target_path."""
     import time
-    
+
     start_time = time.time()
-    
-    for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
-        if not frame_processor.pre_start():
-            return
-    update_status('Processing...')
-    
-    # process image to image
+
     if has_image_extension(modules.globals.target_path):
         if modules.globals.nsfw_filter and ui.check_and_ignore_nsfw(modules.globals.target_path, destroy):
-            return
+            return False
         try:
             shutil.copy2(modules.globals.target_path, modules.globals.output_path)
         except Exception as e:
@@ -226,15 +221,13 @@ def start() -> None:
         if is_image(modules.globals.target_path):
             elapsed = time.time() - start_time
             update_status(f'Processing to image succeed! (Time: {elapsed:.2f}s)')
-        else:
-            update_status('Processing to image failed!')
-        return
-    
-    # process image to videos
-    if modules.globals.nsfw_filter and ui.check_and_ignore_nsfw(modules.globals.target_path, destroy):
-        return
+            return True
+        update_status('Processing to image failed!')
+        return False
 
-    # Detect FPS early (needed by both pipelines)
+    if modules.globals.nsfw_filter and ui.check_and_ignore_nsfw(modules.globals.target_path, destroy):
+        return False
+
     if modules.globals.keep_fps:
         update_status('Detecting fps...')
         fps = detect_fps(modules.globals.target_path)
@@ -243,9 +236,6 @@ def start() -> None:
 
     video_created = False
 
-    # --- In-memory pipeline (non-map_faces only) ---
-    # Reads frames from FFmpeg pipe, processes in memory, encodes directly.
-    # Eliminates all per-frame PNG disk I/O for a major speed-up.
     if not modules.globals.map_faces:
         update_status(f'Processing video in-memory at {fps} fps...')
         create_temp(modules.globals.target_path)
@@ -262,17 +252,14 @@ def start() -> None:
         if video_created:
             update_status(f'In-memory processing + encoding completed in {processing_time:.2f}s')
 
-    # --- Disk-based fallback (required for map_faces, or if pipe failed) ---
     if not video_created:
         if not modules.globals.map_faces:
             update_status('Falling back to disk-based processing...')
 
-        extraction_start = time.time()
         if not modules.globals.map_faces:
             create_temp(modules.globals.target_path)
             update_status('Extracting frames...')
             extract_frames(modules.globals.target_path)
-        extraction_time = time.time() - extraction_start
 
         temp_frame_paths = get_temp_frame_paths(modules.globals.target_path)
         total_frames = len(temp_frame_paths)
@@ -297,9 +284,8 @@ def start() -> None:
     if not video_created:
         update_status('Video encoding failed. No temporary output video was created.')
         clean_temp(modules.globals.target_path)
-        return
-    
-    # handle audio
+        return False
+
     if modules.globals.keep_audio:
         if modules.globals.keep_fps:
             update_status('Restoring audio...')
@@ -308,15 +294,60 @@ def start() -> None:
         restore_audio(modules.globals.target_path, modules.globals.output_path)
     else:
         move_temp(modules.globals.target_path, modules.globals.output_path)
-    
-    # clean and validate
+
     clean_temp(modules.globals.target_path)
-    
+
     total_time = time.time() - start_time
     if is_video(modules.globals.target_path) and modules.globals.output_path and os.path.isfile(modules.globals.output_path):
         update_status(f'Video processing succeeded! Total time: {total_time:.2f}s')
-    else:
-        update_status('Processing to video failed!')
+        return True
+
+    update_status('Processing to video failed!')
+    return False
+
+def start() -> None:
+    """Start processing with performance monitoring."""
+    for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
+        if not frame_processor.pre_start():
+            return
+    update_status('Processing...')
+
+    target_paths = modules.globals.target_paths or ([modules.globals.target_path] if modules.globals.target_path else [])
+    if not target_paths:
+        update_status('Please select a target image or video.')
+        return
+
+    if len(target_paths) > 1:
+        if modules.globals.map_faces:
+            update_status('Batch target processing is not available when Map faces is enabled.')
+            return
+        if not modules.globals.output_path or not os.path.isdir(modules.globals.output_path):
+            update_status('Please select an output folder for batch processing.')
+            return
+
+        original_target_path = modules.globals.target_path
+        original_output_path = modules.globals.output_path
+        success_count = 0
+
+        try:
+            for index, target_path in enumerate(target_paths, start=1):
+                modules.globals.target_path = target_path
+                modules.globals.output_path = normalize_output_path(
+                    modules.globals.source_path,
+                    target_path,
+                    original_output_path,
+                )
+                update_status(f'Batch {index}/{len(target_paths)}: {os.path.basename(target_path)}')
+                if _process_current_target():
+                    success_count += 1
+        finally:
+            modules.globals.target_path = original_target_path
+            modules.globals.output_path = original_output_path
+
+        update_status(f'Batch processing finished: {success_count}/{len(target_paths)} succeeded.')
+        return
+
+    _process_current_target()
 
 
 def destroy(to_quit=True) -> None:
